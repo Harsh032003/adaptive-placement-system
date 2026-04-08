@@ -267,35 +267,43 @@ function App() {
   if (!user) {
     return (
       <div className="auth-shell">
-        <div className="card auth-card">
-          <div className="auth-header">
-            <h2 className="auth-title">Placement Prep AI</h2>
-            <p className="hint">Build your core CS foundations with adaptive practice.</p>
-          </div>
-          <div className="tabs">
-            <button className={`tab ${authMode === 'login' ? 'active' : ''}`} onClick={() => setAuthMode("login")}>Login</button>
-            <button className={`tab ${authMode === 'signup' ? 'active' : ''}`} onClick={() => setAuthMode("signup")}>Sign Up</button>
-          </div>
-          <form onSubmit={authMode === "login" ? handleLogin : handleSignup}>
-            <div className="field">
-              <label>Username</label>
-              <input value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} placeholder="yourname" />
+        <div className="auth-panel">
+          <div className="card auth-card auth-card-compact">
+            <div className="auth-header auth-header-centered">
+              <span className="auth-kicker">Adaptive Interview Preparation</span>
+              {/* <h2 className="auth-title">Placement Prep AI</h2> */}
+              <p className="hint auth-subtitle">Build your core CS foundations with adaptive practice.</p>
             </div>
-            <div className="field">
-              <label>Password</label>
-              <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="••••••••" />
+            <div className="tabs auth-tabs">
+              <button className={`tab ${authMode === 'login' ? 'active' : ''}`} onClick={() => setAuthMode("login")}>Login</button>
+              <button className={`tab ${authMode === 'signup' ? 'active' : ''}`} onClick={() => setAuthMode("signup")}>Sign Up</button>
             </div>
-            {authMode === "signup" && (
-              <div className="field">
-                <label>Admin Code (optional)</label>
-                <input value={adminCodeInput} onChange={(e) => setAdminCodeInput(e.target.value)} placeholder="ADMIN_SIGNUP_CODE" />
+            <form className="auth-form" onSubmit={authMode === "login" ? handleLogin : handleSignup}>
+              <div className="field auth-field">
+                <label>Username</label>
+                <input value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} placeholder="yourname" />
               </div>
-            )}
-            {authError && <p className="error">{authError}</p>}
-            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 8 }}>
-              {authMode === "login" ? "Login" : "Create Account"}
-            </button>
-          </form>
+              <div className="field auth-field">
+                <label>Password</label>
+                <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="••••••••" />
+              </div>
+              {authMode === "signup" && (
+                <div className="field auth-field">
+                  <label>Admin Code (optional)</label>
+                  <input value={adminCodeInput} onChange={(e) => setAdminCodeInput(e.target.value)} placeholder="ADMIN_SIGNUP_CODE" />
+                </div>
+              )}
+              {authError && <p className="error auth-error">{authError}</p>}
+              <button type="submit" className="btn btn-primary auth-submit">
+                {authMode === "login" ? "Login" : "Create Account"}
+              </button>
+            </form>
+          </div>
+          <div className="auth-caption">
+            <span>Topic-aware practice</span>
+            <span>AI-based drift detection</span>
+            <span>Note-grounded explanations</span>
+          </div>
         </div>
       </div>
     );
