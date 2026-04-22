@@ -1,0 +1,53 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: adaptive_placement
+    ports:
+      - "5432:5432"
+    volumes:
+      - adaptive_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d adaptive_placement"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/adaptive_placement
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      ADMIN_SIGNUP_CODE: ${ADMIN_SIGNUP_CODE:-capstone-admin}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      RAG_EXPLANATION_COOLDOWN_SECONDS: ${RAG_EXPLANATION_COOLDOWN_SECONDS:-180}
+      DRIFT_AI_COOLDOWN_SECONDS: ${DRIFT_AI_COOLDOWN_SECONDS:-120}
+    ports:
+      - "8000:8000"
+    volumes:
+      - adaptive_uploads:/app/backend/uploads
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  adaptive_pgdata:
+  adaptive_uploads:

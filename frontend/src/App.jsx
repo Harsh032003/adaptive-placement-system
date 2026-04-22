@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import './App.css';
 
-const API_URL = "http://localhost:8000";
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
 function MasteryBars({ data }) {
   const topics = data || [];
@@ -23,6 +23,136 @@ function MasteryBars({ data }) {
   );
 }
 
+function AnalyticsPanel({ analytics }) {
+  const [activeInsightTab, setActiveInsightTab] = useState("focus");
+  const summary = analytics?.summary || {};
+  const trend = analytics?.mastery_trend || [];
+  const weakTopics = analytics?.weak_topics || [];
+  const responseTimes = analytics?.response_time_by_topic || [];
+  const driftFrequency = analytics?.drift_frequency_by_topic || [];
+  const primaryWeakTopic = weakTopics[0];
+
+  if (!analytics || (summary.total_attempts || 0) === 0) {
+    return <p className="hint">Complete a few questions to unlock deeper learning insights.</p>;
+  }
+
+  return (
+    <div className="analytics-panel">
+      <div className="insight-grid">
+        <div className="insight-tile">
+          <span>Accuracy</span>
+          <strong>{summary.accuracy_percent}%</strong>
+        </div>
+        <div className="insight-tile">
+          <span>Avg Time</span>
+          <strong>{summary.avg_time_seconds}s</strong>
+        </div>
+        <div className="insight-tile">
+          <span>Drift Events</span>
+          <strong>{summary.drift_events}</strong>
+        </div>
+      </div>
+
+      {primaryWeakTopic && (
+        <div className="priority-insight">
+          <span>Priority Focus</span>
+          <strong>{primaryWeakTopic.topic}</strong>
+          <p>{primaryWeakTopic.recommendation}</p>
+        </div>
+      )}
+
+      <div className="insight-tabs">
+        <button
+          className={activeInsightTab === "focus" ? "active" : ""}
+          onClick={() => setActiveInsightTab("focus")}
+        >
+          Focus
+        </button>
+        <button
+          className={activeInsightTab === "speed" ? "active" : ""}
+          onClick={() => setActiveInsightTab("speed")}
+        >
+          Speed
+        </button>
+        <button
+          className={activeInsightTab === "drift" ? "active" : ""}
+          onClick={() => setActiveInsightTab("drift")}
+        >
+          Drift
+        </button>
+      </div>
+
+      {activeInsightTab === "focus" && (
+        <div className="insight-block">
+          <div className="insight-heading">
+            <strong>Weak Topics</strong>
+            <span>Lowest mastery first</span>
+          </div>
+          <div className="mini-list">
+            {weakTopics.map((topic) => (
+              <div key={topic.topic} className="mini-list-item">
+                <div>
+                  <strong>{topic.topic}</strong>
+                  <span>{topic.recommendation}</span>
+                </div>
+                <em>{topic.mastery_percent}%</em>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeInsightTab === "speed" && (
+        <div className="insight-block">
+          <div className="insight-heading">
+            <strong>Response Time</strong>
+            <span>Slowest topics first</span>
+          </div>
+          <div className="mini-list">
+            {responseTimes.slice(0, 4).map((topic) => (
+              <div key={topic.topic} className="mini-list-item compact">
+                <span>{topic.topic}</span>
+                <em>{topic.avg_time_seconds}s</em>
+              </div>
+            ))}
+          </div>
+          <div className="insight-heading" style={{ marginTop: 8 }}>
+            <strong>Mastery Trend</strong>
+            <span>Last {trend.length} attempts</span>
+          </div>
+          <div className="trend-bars">
+            {trend.map((point) => (
+              <div
+                key={`${point.attempt}-${point.created_at}`}
+                className="trend-bar"
+                title={`${point.topic}: ${point.mastery_percent}%`}
+                style={{ height: `${Math.max(8, point.mastery_percent)}%` }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeInsightTab === "drift" && (
+        <div className="insight-block">
+          <div className="insight-heading">
+            <strong>Drift Frequency</strong>
+            <span>Higher means more struggle</span>
+          </div>
+          <div className="mini-list">
+            {driftFrequency.slice(0, 4).map((topic) => (
+              <div key={topic.topic} className="mini-list-item compact">
+                <span>{topic.topic}</span>
+                <em>{topic.drift_events} events</em>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState("");
@@ -34,6 +164,7 @@ function App() {
   const [view, setView] = useState("quiz");
 
   const [question, setQuestion] = useState(null);
+  const [questionStartedAt, setQuestionStartedAt] = useState(null);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState(null);
   const [mastery, setMastery] = useState(0.5);
@@ -42,15 +173,20 @@ function App() {
   const [attempts, setAttempts] = useState(0);
   const [driftCount, setDriftCount] = useState(0);
   const [topicStats, setTopicStats] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [availableTopics, setAvailableTopics] = useState([]);
+  const [selectedTopic, setSelectedTopic] = useState("All Topics");
   const [historyItems, setHistoryItems] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [questionError, setQuestionError] = useState("");
 
   const [questionForm, setQuestionForm] = useState({
     topic: "",
     difficulty: "easy",
     text: "",
-    correct: "",
+    options: ["", "", "", ""],
+    correct_option: "A",
   });
   const [noteForm, setNoteForm] = useState({
     title: "",
@@ -63,6 +199,9 @@ function App() {
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState("");
+  const [adminSuccess, setAdminSuccess] = useState("");
+  const [editingQuestionId, setEditingQuestionId] = useState(null);
+  const [editingNoteId, setEditingNoteId] = useState(null);
 
   useEffect(() => {
     const storedToken = localStorage.getItem("token");
@@ -81,13 +220,6 @@ function App() {
     }
   }, [token]);
 
-  useEffect(() => {
-    if (user) {
-      fetchQuestion();
-      loadTopicMastery();
-    }
-  }, [user]);
-
   const setAuth = (payload) => {
     setToken(payload.access_token);
     setUser(payload.user);
@@ -95,6 +227,17 @@ function App() {
     localStorage.setItem("user", JSON.stringify(payload.user));
     setAuthError("");
   };
+
+  const setActiveQuestion = (nextQuestion) => {
+    setQuestion(nextQuestion);
+    setAnswer("");
+    setFeedback(null);
+    setSubmitError("");
+    setQuestionError("");
+    setQuestionStartedAt(nextQuestion ? Date.now() : null);
+  };
+
+  const currentTopicFilter = selectedTopic === "All Topics" ? null : selectedTopic;
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -132,31 +275,61 @@ function App() {
     setAnswer("");
     setAttempts(0);
     setDriftCount(0);
+    setAnalytics(null);
+    setAvailableTopics([]);
+    setSelectedTopic("All Topics");
+    setQuestionError("");
     localStorage.removeItem("token");
     localStorage.removeItem("user");
   };
 
-  const fetchQuestion = async () => {
+  const fetchQuestion = useCallback(async (topicOverride = currentTopicFilter) => {
     try {
-      const res = await axios.get(`${API_URL}/get-question`);
-      setQuestion(res.data);
-      setAnswer("");
-      setFeedback(null);
-      setSubmitError("");
+      setQuestionError("");
+      const res = await axios.get(`${API_URL}/get-question`, {
+        params: topicOverride ? { topic: topicOverride } : {},
+      });
+      setActiveQuestion(res.data);
     } catch (error) {
       console.error("Error fetching question", error);
+      setQuestion(null);
+      setAnswer("");
+      setFeedback(null);
+      setQuestionStartedAt(null);
+      setQuestionError(
+        topicOverride
+          ? `No questions available for ${topicOverride} right now.`
+          : "No questions available right now."
+      );
     }
-  };
+  }, [currentTopicFilter]);
+
+  const loadTopics = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_URL}/topics`);
+      setAvailableTopics(res.data.topics || []);
+    } catch (error) {
+      console.error("Error loading topics", error);
+    }
+  }, []);
 
   const handleSubmit = async () => {
     if (!question) return;
+    if (!answer) {
+      setSubmitError("Select one option before submitting.");
+      return;
+    }
     setLoading(true);
     setSubmitError("");
+    const elapsedSeconds = questionStartedAt
+      ? Math.max(1, Math.round((Date.now() - questionStartedAt) / 1000))
+      : 1;
     try {
       const res = await axios.post(`${API_URL}/submit`, {
         question_id: question.id,
         user_answer: answer,
-        time_taken_seconds: 25,
+        time_taken_seconds: elapsedSeconds,
+        selected_topic: currentTopicFilter,
       });
 
       setFeedback(res.data);
@@ -164,6 +337,7 @@ function App() {
       setAttempts((prev) => prev + 1);
       if (res.data.drift_alert) setDriftCount((prev) => prev + 1);
       loadTopicMastery();
+      loadUserAnalytics();
     } catch (error) {
       console.error("Error submitting", error);
       setSubmitError("We could not submit your answer. Please try again.");
@@ -189,21 +363,84 @@ function App() {
     setAdminLoading(false);
   };
 
-  const handleCreateQuestion = async (e) => {
+  const resetQuestionForm = () => {
+    setEditingQuestionId(null);
+    setQuestionForm({
+      topic: "",
+      difficulty: "easy",
+      text: "",
+      options: ["", "", "", ""],
+      correct_option: "A",
+    });
+  };
+
+  const handleSaveQuestion = async (e) => {
     e.preventDefault();
     setAdminError("");
+    setAdminSuccess("");
     try {
-      await axios.post(`${API_URL}/admin/questions`, questionForm);
-      setQuestionForm({ topic: "", difficulty: "easy", text: "", correct: "" });
+      if (editingQuestionId) {
+        await axios.put(`${API_URL}/admin/questions/${editingQuestionId}`, questionForm);
+        setAdminSuccess("Question updated successfully.");
+      } else {
+        await axios.post(`${API_URL}/admin/questions`, questionForm);
+        setAdminSuccess("Question created successfully.");
+      }
+      resetQuestionForm();
+      loadTopics();
       loadAdminData();
     } catch (error) {
-      setAdminError("Failed to create question");
+      setAdminError(editingQuestionId ? "Failed to update question" : "Failed to create question");
     }
   };
 
-  const handleCreateNote = async (e) => {
+  const handleEditQuestion = (questionToEdit) => {
+    setEditingQuestionId(questionToEdit.id);
+    setAdminError("");
+    setAdminSuccess("");
+    setQuestionForm({
+      topic: questionToEdit.topic || "",
+      difficulty: questionToEdit.difficulty || "easy",
+      text: questionToEdit.text || "",
+      options: questionToEdit.options || ["", "", "", ""],
+      correct_option: questionToEdit.correct_option || "A",
+    });
+  };
+
+  const handleDeleteQuestion = async (questionId) => {
+    if (!window.confirm("Delete this question? Related attempt logs may also be removed.")) return;
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      await axios.delete(`${API_URL}/admin/questions/${questionId}`);
+      if (editingQuestionId === questionId) resetQuestionForm();
+      setAdminSuccess("Question deleted successfully.");
+      loadTopics();
+      loadAdminData();
+      loadTopicMastery();
+      loadUserAnalytics();
+    } catch (error) {
+      setAdminError("Failed to delete question");
+    }
+  };
+
+  const handleQuestionOptionChange = (index, value) => {
+    setQuestionForm((current) => {
+      const nextOptions = [...current.options];
+      nextOptions[index] = value;
+      return { ...current, options: nextOptions };
+    });
+  };
+
+  const resetNoteForm = () => {
+    setEditingNoteId(null);
+    setNoteForm({ title: "", topic: "", content: "", file: null });
+  };
+
+  const handleSaveNote = async (e) => {
     e.preventDefault();
     setAdminError("");
+    setAdminSuccess("");
     try {
       const formData = new FormData();
       formData.append("title", noteForm.title);
@@ -211,18 +448,54 @@ function App() {
       if (noteForm.content) formData.append("content", noteForm.content);
       if (noteForm.file) formData.append("file", noteForm.file);
 
-      await axios.post(`${API_URL}/admin/theory-notes`, formData, {
+      const url = editingNoteId
+        ? `${API_URL}/admin/theory-notes/${editingNoteId}`
+        : `${API_URL}/admin/theory-notes`;
+      const wasEditing = Boolean(editingNoteId);
+      await (wasEditing ? axios.put : axios.post)(url, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setNoteForm({ title: "", topic: "", content: "", file: null });
+      resetNoteForm();
+      setAdminSuccess(
+        wasEditing
+          ? "Note updated. Re-ingestion was attempted automatically."
+          : "Note uploaded. Ingestion was attempted automatically."
+      );
       loadAdminData();
     } catch (error) {
-      setAdminError("Failed to upload note");
+      setAdminError(editingNoteId ? "Failed to update note" : "Failed to upload note");
+    }
+  };
+
+  const handleEditNote = (noteToEdit) => {
+    setEditingNoteId(noteToEdit.id);
+    setAdminError("");
+    setAdminSuccess("");
+    setNoteForm({
+      title: noteToEdit.title || "",
+      topic: noteToEdit.topic || "",
+      content: noteToEdit.content || "",
+      file: null,
+    });
+  };
+
+  const handleDeleteNote = async (noteId) => {
+    if (!window.confirm("Delete this theory note and its embeddings?")) return;
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      await axios.delete(`${API_URL}/admin/theory-notes/${noteId}`);
+      if (editingNoteId === noteId) resetNoteForm();
+      setAdminSuccess("Theory note deleted successfully.");
+      loadAdminData();
+    } catch (error) {
+      setAdminError("Failed to delete note");
     }
   };
 
   const handleToggleAdmin = async (userId, isAdmin) => {
     setAdminError("");
+    setAdminSuccess("");
     try {
       await axios.patch(`${API_URL}/admin/users/${userId}`, { is_admin: !isAdmin });
       loadAdminData();
@@ -231,13 +504,64 @@ function App() {
     }
   };
 
-  const loadTopicMastery = async () => {
+  const handleIngestNote = async (noteId) => {
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      await axios.post(`${API_URL}/admin/theory-notes/${noteId}/ingest`);
+      setAdminSuccess("Note ingested successfully.");
+      loadAdminData();
+    } catch (error) {
+      setAdminError("Failed to ingest note.");
+    }
+  };
+
+  const handleIngestAllNotes = async () => {
+    setAdminError("");
+    setAdminSuccess("");
+    try {
+      const res = await axios.post(`${API_URL}/admin/theory-notes/ingest-all`);
+      setAdminSuccess(res.data.message || "All notes ingested successfully.");
+      loadAdminData();
+    } catch (error) {
+      setAdminError("Failed to ingest all notes.");
+    }
+  };
+
+  const loadTopicMastery = useCallback(async () => {
     try {
       const res = await axios.get(`${API_URL}/stats/topic-mastery`);
       setTopicStats(res.data.topics || []);
     } catch (error) {
       console.error("Error loading topic mastery", error);
     }
+  }, []);
+
+  const loadUserAnalytics = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_URL}/analytics/user`);
+      setAnalytics(res.data);
+    } catch (error) {
+      console.error("Error loading user analytics", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      loadTopics();
+      fetchQuestion(currentTopicFilter);
+      loadTopicMastery();
+      loadUserAnalytics();
+    }
+  }, [user, currentTopicFilter, fetchQuestion, loadTopics, loadTopicMastery, loadUserAnalytics]);
+
+  const handleTopicChange = (topic) => {
+    setSelectedTopic(topic);
+    setQuestion(null);
+    setFeedback(null);
+    setAnswer("");
+    setQuestionStartedAt(null);
+    setQuestionError("");
   };
 
   const loadHistory = async () => {
@@ -258,11 +582,13 @@ function App() {
     }
     if (user && view === "history") {
       loadHistory();
+      loadUserAnalytics();
     }
     if (user && view === "quiz") {
       loadTopicMastery();
+      loadUserAnalytics();
     }
-  }, [user, view]);
+  }, [user, view, loadTopicMastery, loadUserAnalytics]);
 
   if (!user) {
     return (
@@ -332,8 +658,13 @@ function App() {
         {view === "admin" && user.is_admin ? (
           <div className="grid grid-2">
             <div className="card card-pad">
-              <h3 className="section-title">Add Question</h3>
-              <form onSubmit={handleCreateQuestion}>
+              <div className="list-header">
+                <h3 className="section-title">{editingQuestionId ? "Edit Question" : "Add Question"}</h3>
+                {editingQuestionId && (
+                  <button className="btn" type="button" onClick={resetQuestionForm}>Cancel</button>
+                )}
+              </div>
+              <form onSubmit={handleSaveQuestion}>
                 <div className="field">
                   <label>Topic</label>
                   <input value={questionForm.topic} onChange={(e) => setQuestionForm({ ...questionForm, topic: e.target.value })} />
@@ -351,16 +682,47 @@ function App() {
                   <textarea value={questionForm.text} onChange={(e) => setQuestionForm({ ...questionForm, text: e.target.value })} />
                 </div>
                 <div className="field">
-                  <label>Correct Answer</label>
-                  <textarea value={questionForm.correct} onChange={(e) => setQuestionForm({ ...questionForm, correct: e.target.value })} />
+                  <label>Option A</label>
+                  <input value={questionForm.options[0]} onChange={(e) => handleQuestionOptionChange(0, e.target.value)} />
                 </div>
-                <button className="btn btn-primary" type="submit">Save Question</button>
+                <div className="field">
+                  <label>Option B</label>
+                  <input value={questionForm.options[1]} onChange={(e) => handleQuestionOptionChange(1, e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Option C</label>
+                  <input value={questionForm.options[2]} onChange={(e) => handleQuestionOptionChange(2, e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Option D</label>
+                  <input value={questionForm.options[3]} onChange={(e) => handleQuestionOptionChange(3, e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Correct Option</label>
+                  <select
+                    value={questionForm.correct_option}
+                    onChange={(e) => setQuestionForm({ ...questionForm, correct_option: e.target.value })}
+                  >
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                  </select>
+                </div>
+                <button className="btn btn-primary" type="submit">
+                  {editingQuestionId ? "Update Question" : "Save Question"}
+                </button>
               </form>
             </div>
 
             <div className="card card-pad">
-              <h3 className="section-title">Upload Theory Note</h3>
-              <form onSubmit={handleCreateNote}>
+              <div className="list-header">
+                <h3 className="section-title">{editingNoteId ? "Edit Theory Note" : "Upload Theory Note"}</h3>
+                {editingNoteId && (
+                  <button className="btn" type="button" onClick={resetNoteForm}>Cancel</button>
+                )}
+              </div>
+              <form onSubmit={handleSaveNote}>
                 <div className="field">
                   <label>Title</label>
                   <input value={noteForm.title} onChange={(e) => setNoteForm({ ...noteForm, title: e.target.value })} />
@@ -374,10 +736,12 @@ function App() {
                   <textarea value={noteForm.content} onChange={(e) => setNoteForm({ ...noteForm, content: e.target.value })} />
                 </div>
                 <div className="field">
-                  <label>Upload PDF</label>
+                  <label>{editingNoteId ? "Replace PDF (optional)" : "Upload PDF"}</label>
                   <input type="file" onChange={(e) => setNoteForm({ ...noteForm, file: e.target.files[0] })} />
                 </div>
-                <button className="btn btn-primary" type="submit">Upload Note</button>
+                <button className="btn btn-primary" type="submit">
+                  {editingNoteId ? "Update Note" : "Upload Note"}
+                </button>
               </form>
             </div>
 
@@ -397,23 +761,39 @@ function App() {
                         <div key={q.id} className="list-item">
                           <strong>{q.topic} ({q.difficulty})</strong>
                           <div className="hint">{q.text}</div>
+                          <div className="action-row">
+                            <button className="btn" onClick={() => handleEditQuestion(q)}>Edit</button>
+                            <button className="btn btn-danger" onClick={() => handleDeleteQuestion(q.id)}>Delete</button>
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
                   <div>
-                    <h4 className="section-title">Theory Notes</h4>
+                    <div className="list-header">
+                      <h4 className="section-title">Theory Notes</h4>
+                      <button className="btn" onClick={handleIngestAllNotes}>Ingest All</button>
+                    </div>
                     <div className="list">
                       {adminNotes.map((n) => (
                         <div key={n.id} className="list-item">
                           <strong>{n.title}</strong>
                           {n.topic && <div className="hint">Topic: {n.topic}</div>}
+                          <div className="hint">
+                            Status: {n.ingestion_status} • Chunks: {n.embedding_chunks || 0}
+                          </div>
+                          {n.ingestion_error && <div className="error">{n.ingestion_error}</div>}
                           {n.content && <div className="hint">{n.content}</div>}
                           {n.file_url && (
                             <div className="hint">
                               <a href={`${API_URL}${n.file_url}`} target="_blank" rel="noreferrer">Download</a>
                             </div>
                           )}
+                          <div className="action-row">
+                            <button className="btn" onClick={() => handleIngestNote(n.id)}>Ingest Now</button>
+                            <button className="btn" onClick={() => handleEditNote(n)}>Edit</button>
+                            <button className="btn btn-danger" onClick={() => handleDeleteNote(n.id)}>Delete</button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -437,6 +817,7 @@ function App() {
                 </div>
               )}
               {adminError && <p className="error">{adminError}</p>}
+              {adminSuccess && <p className="hint" style={{ marginTop: 8 }}>{adminSuccess}</p>}
             </div>
           </div>
         ) : view === "history" ? (
@@ -458,10 +839,13 @@ function App() {
                     <div key={item.id} className="list-item">
                       <small>{item.topic || "Unknown"} • {item.difficulty || "N/A"} • {new Date(item.created_at).toLocaleString()}</small>
                       <p style={{ marginTop: 8 }}><strong>{item.question}</strong></p>
-                      <p style={{ marginTop: 6 }}>Your Answer: {item.user_answer}</p>
+                      <p style={{ marginTop: 6 }}>Your Answer: {item.user_answer_text || item.user_answer}</p>
                       <p style={{ marginTop: 6, color: item.correct ? '#0f766e' : '#b91c1c' }}>
                         {item.correct ? "Correct" : "Incorrect"}
                       </p>
+                      {!item.correct && item.correct_answer_text && (
+                        <p style={{ marginTop: 6 }}>Correct Answer: {item.correct_answer_text}</p>
+                      )}
                       {item.explanation && (
                         <p style={{ marginTop: 8 }}><strong>Explanation:</strong> {item.explanation}</p>
                       )}
@@ -477,6 +861,10 @@ function App() {
               ) : (
                 <MasteryBars data={topicStats} />
               )}
+              <div style={{ borderTop: '1px solid var(--line)', marginTop: 18, paddingTop: 18 }}>
+                <h3 className="section-title">Learning Insights</h3>
+                <AnalyticsPanel analytics={analytics} />
+              </div>
             </div>
           </div>
         ) : (
@@ -486,6 +874,23 @@ function App() {
                 <h3>Adaptive Practice</h3>
                 <p>Answer questions. We adjust difficulty and explanations in real time.</p>
               </div>
+              <div className="topic-tabs">
+                <button
+                  className={`topic-tab ${selectedTopic === "All Topics" ? 'active' : ''}`}
+                  onClick={() => handleTopicChange("All Topics")}
+                >
+                  All Topics
+                </button>
+                {availableTopics.map((topic) => (
+                  <button
+                    key={topic}
+                    className={`topic-tab ${selectedTopic === topic ? 'active' : ''}`}
+                    onClick={() => handleTopicChange(topic)}
+                  >
+                    {topic}
+                  </button>
+                ))}
+              </div>
               {question ? (
                 <div className="fade-in">
                   <div className={`badge ${question.difficulty}`}>
@@ -493,16 +898,31 @@ function App() {
                   </div>
                   <div className="question-meta">
                     <span>Question #{attempts + 1}</span>
-                    <span>Adaptive practice mode</span>
+                    <span>{currentTopicFilter ? `${currentTopicFilter} focus mode` : "Adaptive practice mode"}</span>
                   </div>
                   <div className="divider"></div>
                   <p style={{ fontSize: 18 }}>{question.text}</p>
 
                   {!feedback ? (
                     <div style={{ marginTop: 16 }}>
-                      <div className="field">
-                        <label>Your Answer</label>
-                        <input value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="Type your answer" />
+                      <div className="mcq-group">
+                        {(question.options || []).map((option, index) => {
+                          const optionKey = String.fromCharCode(65 + index);
+                          const checked = answer === optionKey;
+                          return (
+                            <label key={optionKey} className={`mcq-option ${checked ? 'selected' : ''}`}>
+                              <input
+                                type="radio"
+                                name={`question-${question.id}`}
+                                value={optionKey}
+                                checked={checked}
+                                onChange={(e) => setAnswer(e.target.value)}
+                              />
+                              <span className="mcq-option-key">{optionKey}</span>
+                              <span className="mcq-option-text">{option}</span>
+                            </label>
+                          );
+                        })}
                       </div>
                       <button className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
                         {loading ? (<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}><span className="spinner" /> Analyzing...</span>) : "Submit Answer"}
@@ -523,15 +943,21 @@ function App() {
                       {feedback.drift_alert && (
                         <div className="alert">Skill drift detected. We lowered the difficulty and provided revision notes.</div>
                       )}
-                      <button className="btn" style={{ marginTop: 12 }} onClick={() => setQuestion(feedback.next_question) || setFeedback(null) || setAnswer("")}>Next Question</button>
+                      <button className="btn" style={{ marginTop: 12 }} onClick={() => setActiveQuestion(feedback.next_question)}>Next Question</button>
                     </div>
                   )}
                 </div>
               ) : (
                 <div>
-                  <div className="skeleton" style={{ height: 18, width: '70%', marginBottom: 12 }}></div>
-                  <div className="skeleton" style={{ height: 12, width: '90%', marginBottom: 8 }}></div>
-                  <div className="skeleton" style={{ height: 12, width: '80%' }}></div>
+                  {questionError ? (
+                    <p className="hint">{questionError}</p>
+                  ) : (
+                    <>
+                      <div className="skeleton" style={{ height: 18, width: '70%', marginBottom: 12 }}></div>
+                      <div className="skeleton" style={{ height: 12, width: '90%', marginBottom: 8 }}></div>
+                      <div className="skeleton" style={{ height: 12, width: '80%' }}></div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -550,6 +976,10 @@ function App() {
                   <div className="stat-row"><span>Drift Events</span><span>{driftCount}</span></div>
                   <div className="stat-row"><span>Current Skill</span><span>{Math.round(mastery * 100)}%</span></div>
                 </div>
+              </div>
+              <div style={{ borderTop: '1px solid var(--line)', marginTop: 18, paddingTop: 18 }}>
+                <h4 className="section-title">Learning Insights</h4>
+                <AnalyticsPanel analytics={analytics} />
               </div>
             </div>
           </div>

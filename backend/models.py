@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, Float, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 
@@ -27,10 +27,19 @@ class Question(Base):
     topic = Column(String(100), nullable=False)
     difficulty = Column(String(20), nullable=False)
     text = Column(Text, nullable=False)
-    correct = Column(Text, nullable=False)
+    options = Column(JSON, nullable=False, default=list)
+    correct_option = Column(String(10), nullable=False)
+    correct = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
     logs = relationship("TestLog", back_populates="question", cascade="all, delete-orphan")
+
+    def option_text(self, option_key: str) -> str:
+        if not self.options:
+            return option_key
+        labels = ["A", "B", "C", "D"]
+        mapping = {labels[index]: value for index, value in enumerate(self.options)}
+        return mapping.get(option_key, option_key)
 
 
 class TestLog(Base):
